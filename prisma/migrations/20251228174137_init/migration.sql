@@ -10,7 +10,7 @@ CREATE TABLE "posts" (
     "title" VARCHAR(225) NOT NULL,
     "content" TEXT NOT NULL,
     "thumbnail" TEXT,
-    "isFeatured" BOOLEAN NOT NULL,
+    "isFeatured" BOOLEAN NOT NULL DEFAULT false,
     "status" "PostStatus" NOT NULL DEFAULT 'PUBLISHED',
     "tags" TEXT[],
     "views" INTEGER NOT NULL DEFAULT 0,
