@@ -1,6 +1,11 @@
-import type { Post, PostStatus } from "../../../generated/prisma/client";
+import {
+  CommentStatus,
+  type Post,
+  type PostStatus,
+} from "../../../generated/prisma/client";
 import type { PostWhereInput } from "../../../generated/prisma/models";
 import { prisma } from "../../lib/prisma";
+import { UserRole } from "../../middleware/auth";
 
 const createPost = async (
   data: Omit<Post, "id" | "createdAt" | "updatedAt" | "author_id">,
@@ -82,6 +87,13 @@ const getAllPosts = async (payload: {
     orderBy: {
       [payload.sortBy]: payload.sortOrder,
     },
+    include: {
+      _count: {
+        select: {
+          comments: true,
+        },
+      },
+    },
   });
 
   const total = await prisma.post.count({
@@ -106,7 +118,42 @@ const getPostById = async (id: string) => {
       where: {
         id: id,
       },
+      include: {
+        comments: {
+          where: {
+            parent_id: null,
+            status: CommentStatus.APPROVED,
+          },
+          orderBy: {
+            createdAt: "desc",
+          },
+          include: {
+            replies: {
+              where: {
+                status: CommentStatus.APPROVED,
+              },
+              orderBy: {
+                createdAt: "asc",
+              },
+              include: {
+                replies: {
+                  where: {
+                    status: CommentStatus.APPROVED,
+                  },
+                  orderBy: {
+                    createdAt: "asc",
+                  },
+                },
+              },
+            },
+          },
+        },
+        _count: {
+          select: { comments: true },
+        },
+      },
     });
+
     await prisma.post.update({
       where: {
         id: id,
@@ -121,8 +168,153 @@ const getPostById = async (id: string) => {
   });
 };
 
+const getMyPost = async (author_id: string) => {
+  const userInfo = await prisma.user.findUniqueOrThrow({
+    where: {
+      id: author_id,
+      status: "ACTIVE",
+    },
+    select: { id: true },
+  });
+  const result = await prisma.post.findMany({
+    where: {
+      author_id,
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+    include: {
+      _count: {
+        select: {
+          comments: true,
+        },
+      },
+    },
+  });
+  return result;
+};
+
+const updatePost = async (
+  id: string,
+  data: Partial<Post>,
+  author_id: string,
+  isAdmin: boolean
+) => {
+  const postData = await prisma.post.findUniqueOrThrow({
+    where: { id },
+    select: {
+      id: true,
+      author_id: true,
+    },
+  });
+  if (!isAdmin && postData?.author_id !== author_id) {
+    throw new Error("You are not author of the post.");
+  }
+
+  if (!isAdmin) {
+    delete data.isFeatured;
+  }
+
+  return await prisma.post.update({
+    where: {
+      id,
+      author_id,
+    },
+    data,
+  });
+};
+
+const deletePost = async (id: string, author_id: string, isAdmin: boolean) => {
+  const postData = await prisma.post.findUniqueOrThrow({
+    where: { id },
+    select: {
+      id: true,
+      author_id: true,
+    },
+  });
+
+  if (!isAdmin && postData?.author_id !== author_id) {
+    throw new Error("You are not author of the post.");
+  }
+
+  return await prisma.post.delete({
+    where: {
+      id,
+    },
+  });
+};
+
+const getStats = async () => {
+  return await prisma.$transaction(async (tx) => {
+    const [
+      totalPosts,
+      publishedPosts,
+      draftPosts,
+      archivedPosts,
+      totalComments,
+      approvedComment,
+      rejectComment,
+      totalUsers,
+      adminCount,
+      userCount,
+      overAllViews,
+    ] = await Promise.all([
+      await tx.post.count(),
+      await tx.post.count({
+        where: {
+          status: "PUBLISHED",
+        },
+      }),
+
+      await tx.post.count({
+        where: {
+          status: "DRAFT",
+        },
+      }),
+
+      await tx.post.count({
+        where: {
+          status: "ARCHIVED",
+        },
+      }),
+
+      await tx.comment.count(),
+      await tx.comment.count({ where: { status: "APPROVED" } }),
+      await tx.comment.count({ where: { status: "REJECT" } }),
+      await tx.user.count(),
+      await tx.user.count({
+        where: { role: UserRole.ADMIN },
+      }),
+      await tx.user.count({
+        where: { role: UserRole.USER },
+      }),
+      await tx.post.aggregate({
+        _sum: { views: true },
+      }),
+    ]);
+
+    return {
+      totalPosts,
+      publishedPosts,
+      draftPosts,
+      archivedPosts,
+      totalComments,
+      approvedComment,
+      rejectComment,
+      totalUsers,
+      adminCount,
+      userCount,
+      overAllViews: overAllViews._sum.views,
+    };
+  });
+};
+
 export const postService = {
   createPost,
   getAllPosts,
   getPostById,
+  getMyPost,
+  getStats,
+  updatePost,
+  deletePost,
 };
